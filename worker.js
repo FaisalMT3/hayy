@@ -109,15 +109,25 @@ async function callProvider(p, messages, tools) {
   }
 }
 
+// A spent provider stays spent for a while, so remember it rather than rediscovering it on every one of
+// the ~8 calls a brief makes. Without this, falling through to the saved run took over a minute — long
+// enough that a visitor gives up before seeing anything.
+// ponytail: per-isolate and time-based, no coordination; the cost of being wrong is one wasted attempt.
+const spent = new Map();
+const SPENT_MS = 10 * 60 * 1000;
+
 async function llm(env, messages, tools) {
   const ps = providers(env);
   if (!ps.length) throw new Error('No LLM provider configured.');
+  const now = Date.now();
+  const fresh = ps.filter(p => !(spent.get(p.base) > now));
   let last;
-  for (const p of ps) {
+  for (const p of (fresh.length ? fresh : ps)) {
     try { return await callProvider(p, messages, tools); }
     catch (e) {
       last = e;
       if (!e.exhausted) throw e;   // a real failure belongs to the caller; only exhaustion falls through
+      spent.set(p.base, Date.now() + SPENT_MS);
     }
   }
   const e = new Error('All configured LLM providers are out of quota for today.');
