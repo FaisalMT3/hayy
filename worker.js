@@ -67,12 +67,15 @@ const RUN = {
 // requests. One provider therefore cannot keep a public demo up, so configure several and fall through
 // to the next when one is exhausted. Provider 1 is whatever LLM_* says; add LLM_*2 for a backup.
 const providers = env => ['', '2', '3', '4']
-  .map(n => ({ base: env['LLM_BASE' + n], model: env['LLM_MODEL' + n], key: env['LLM_KEY' + n] }))
+  .map(n => ({ base: env['LLM_BASE' + n], model: env['LLM_MODEL' + n], key: env['LLM_KEY' + n],
+               // Routing Workers AI through an AI Gateway is just a header, and it is what enforces the
+               // spend cap: past the budget the gateway refuses the call and the chain falls through.
+               gateway: env['LLM_GATEWAY' + n] }))
   .filter(p => p.base && p.key && p.model);
 
 // Only things that mean "come back tomorrow". Deliberately NOT matching Groq's per-minute message,
 // which also says "upgrade"/"billing" but clears in under a minute and is worth waiting out.
-const EXHAUSTED = /daily free allocation|neurons|exceeded your current quota|RESOURCE_EXHAUSTED|requires more credit|requests per day|RPD/i;
+const EXHAUSTED = /daily free allocation|neurons|exceeded your current quota|RESOURCE_EXHAUSTED|requires more credit|requests per day|RPD|budget|spend limit|AiGatewayError/i;
 
 async function callProvider(p, messages, tools) {
   const body = JSON.stringify({
@@ -85,7 +88,11 @@ async function callProvider(p, messages, tools) {
   for (let attempt = 0; ; attempt++) {
     const r = await fetch(p.base + '/chat/completions', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + p.key },
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + p.key,
+        ...(p.gateway && { 'cf-aig-gateway-id': p.gateway }),
+      },
       body,
     });
     const text = await r.text();
