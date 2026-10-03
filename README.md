@@ -130,8 +130,11 @@ One Cloudflare Worker, one static page, no build step and no dependencies.
 - Posts are written for a Saudi audience: natural Saudi-dialect Arabic, no alcohol, no pork.
 - Tool results are trimmed to names, ids, affinity and a few tags before reaching the model, to keep
   the context small enough for a long tool loop.
-- The hosted demo runs on a free LLM tier with a per-minute quota and a per-visitor cap of 6 briefs
-  per 10 minutes. If you hit either, wait a moment — it resets quickly.
+- The hosted demo runs on free LLM tiers, which all run out: Cloudflare Workers AI caps a day at
+  10,000 neurons and Gemini's free tier at 20 requests. So the worker takes a **list** of
+  OpenAI-compatible providers (`LLM_*`, `LLM_*2`, `LLM_*3`) and falls through to the next when one is
+  spent, and when they are all spent it serves a **real saved run**, clearly labelled as saved, instead
+  of an error page. There is also a per-visitor cap of 6 briefs per 10 minutes.
 - Portability across OpenAI-compatible endpoints needed three specific fixes, each found only by
   running it: `max_tokens` must be sent explicitly (Workers AI's small default truncated the brief
   mid-playlist and looked like malformed JSON); an assistant turn's `content: null` must be coerced to

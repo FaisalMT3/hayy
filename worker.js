@@ -39,12 +39,15 @@ async function qloo(env, path, params) {
   return { status: r.status, url: u.pathname + u.search, body };
 }
 
-// Keep tool results small: the model only needs names, ids, affinity, a few tags.
-const slim = list => (list || []).slice(0, 12).map(e => ({
+// Keep tool results small: the model only needs names, affinity, a few tags. This is the main lever on
+// how many briefs a free tier can serve in a day — the loop re-sends the whole transcript every call,
+// so trimming each result compounds across ~8 calls. Rounding affinity also stops the model echoing
+// 17-digit floats into the evidence list.
+const round2 = n => (typeof n === 'number' ? Math.round(n * 100) / 100 : undefined);
+const slim = list => (list || []).slice(0, 8).map(e => ({
   id: e.entity_id, name: e.name, type: e.subtype || e.types?.[0],
-  affinity: e.query?.affinity ?? e.affinity, popularity: e.popularity,
-  tags: (e.tags || []).slice(0, 5).map(t => t.name),
-  address: e.properties?.address,
+  affinity: round2(e.query?.affinity ?? e.affinity), popularity: round2(e.popularity),
+  tags: (e.tags || []).slice(0, 3).map(t => t.name),
 }));
 
 const RUN = {
@@ -60,34 +63,65 @@ const RUN = {
   qloo_tags: (env, a) => qloo(env, '/v2/tags', { 'filter.query': a.query, take: 10 }),
 };
 
-async function llm(env, messages, tools) {
+// Every free LLM tier runs out: Workers AI caps a day at 10,000 neurons, Gemini's free tier at 20
+// requests. One provider therefore cannot keep a public demo up, so configure several and fall through
+// to the next when one is exhausted. Provider 1 is whatever LLM_* says; add LLM_*2 for a backup.
+const providers = env => ['', '2', '3', '4']
+  .map(n => ({ base: env['LLM_BASE' + n], model: env['LLM_MODEL' + n], key: env['LLM_KEY' + n] }))
+  .filter(p => p.base && p.key && p.model);
+
+// Only things that mean "come back tomorrow". Deliberately NOT matching Groq's per-minute message,
+// which also says "upgrade"/"billing" but clears in under a minute and is worth waiting out.
+const EXHAUSTED = /daily free allocation|neurons|exceeded your current quota|RESOURCE_EXHAUSTED|requires more credit|requests per day|RPD/i;
+
+async function callProvider(p, messages, tools) {
   const body = JSON.stringify({
-    model: env.LLM_MODEL, messages, temperature: 0.4,
+    model: p.model, messages, temperature: 0.4,
     // Must be explicit: Workers AI caps completions at a couple of hundred tokens by default, which
     // truncated the brief mid-playlist and looked like malformed JSON rather than a length limit.
     max_tokens: 4096,
     ...(tools && { tools: tools.map(f => ({ type: 'function', function: f })) }),
   });
-  // Free tiers rate-limit per minute and overload intermittently; a brief is ~10 calls, so one bad
-  // response must not lose the whole run.
   for (let attempt = 0; ; attempt++) {
-    const r = await fetch(env.LLM_BASE + '/chat/completions', {
+    const r = await fetch(p.base + '/chat/completions', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + env.LLM_KEY },
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + p.key },
       body,
     });
     const text = await r.text();
+    // A quota that resets tomorrow is not worth retrying — hand straight to the next provider.
+    if (EXHAUSTED.test(text)) { const e = new Error('exhausted: ' + text.slice(0, 200)); e.exhausted = true; throw e; }
     // 429 = rate limit, 5xx = the model is briefly overloaded; both are routine and both are worth waiting out.
-    if ((r.status === 429 || r.status >= 500) && attempt < 3) {
+    if (r.status === 429 || r.status >= 500) {
       // Cap the wait: a judge staring at a spinner is worse than an honest "try again in a minute".
-      const hint = +(text.match(/try again in ([\d.]+)s/)?.[1] || 0);
-      await new Promise(res => setTimeout(res, Math.min(12, hint || 2 ** attempt * 3) * 1000 + 500));
-      continue;
+      if (attempt < 3) {
+        const hint = +(text.match(/try again in ([\d.]+)s/)?.[1] || 0);
+        // Honour the provider's own hint up to 20s; past that another provider beats waiting.
+        await new Promise(res => setTimeout(res, Math.min(20, hint || 2 ** attempt * 3) * 1000 + 500));
+        continue;
+      }
+      // Still limited after backing off: another provider is likelier to answer than more waiting.
+      const e = new Error('rate-limited: ' + text.slice(0, 160)); e.exhausted = true; throw e;
     }
     const j = JSON.parse(text || '{}');
     if (!j.choices) throw new Error('LLM: ' + text.slice(0, 300));
     return j.choices[0].message;
   }
+}
+
+async function llm(env, messages, tools) {
+  const ps = providers(env);
+  if (!ps.length) throw new Error('No LLM provider configured.');
+  let last;
+  for (const p of ps) {
+    try { return await callProvider(p, messages, tools); }
+    catch (e) {
+      last = e;
+      if (!e.exhausted) throw e;   // a real failure belongs to the caller; only exhaustion falls through
+    }
+  }
+  const e = new Error('All configured LLM providers are out of quota for today.');
+  e.exhausted = true; e.cause = last; throw e;
 }
 
 const BRIEF_SHAPE = `Return ONLY JSON:
@@ -97,7 +131,21 @@ const BRIEF_SHAPE = `Return ONLY JSON:
  "collabs":[{"brand":"…","idea":"…"}],
  "posts":[{"day":"Sun","ar":"Arabic post","en":"English post"}],
  "evidence":["each claim above → the Qloo entity/affinity it rests on"]}
-3 menu ideas, 6 artists, 3 collabs, 5 posts (Sun–Thu). Saudi audience: Arabic posts in natural Saudi tone, no alcohol, no pork.`;
+3 menu ideas, 6 artists, 3 collabs, 5 posts (Sun–Thu). Saudi audience: Arabic posts in natural Saudi tone, no alcohol, no pork.
+
+Be specific or you have failed:
+- "idea" is ONE named item a customer could order, specific enough to print on a menu board:
+  a flavour or ingredient plus a format. Never a category like "specialty coffee drinks",
+  "healthy options" or "vegetarian meals". Derive it from the tags and entities Qloo actually
+  returned for THIS venue — do not reuse any example wording from these instructions. It must be
+  something this venue would plausibly serve given its concept: a coffee roastery sells drinks and
+  things to eat beside them, not a main course.
+- "why" names the Qloo entity or tag that justifies it and what it implies, in one concrete sentence.
+- "collabs" name a real brand or venue that came back from Qloo, plus a specific thing to do together.
+- Every "evidence" line must name the real Qloo entity you received — its NAME, never its id/UUID —
+  and its affinity or popularity number rounded to two decimals, then an arrow, then which recommendation above it supports. Keep it
+  to one line. Never write "as shown by the qloo_insights output" — that says nothing.
+- Posts are written for customers, not about the data: give an actual caption someone would post.`;
 
 const ask = b => `Venue: ${b.venue}\nArea: ${b.area}\nConcept: ${b.concept || 'not given'}`;
 
@@ -142,7 +190,7 @@ async function brief(env, b) {
       const out = res.body?.results?.entities ?? res.body?.results?.tags ?? res.body?.results ?? res.body;
       const data = Array.isArray(out) ? slim(out) : out;
       trace.push({ tool: c.function.name, args, status: res.status, url: res.url, n: Array.isArray(out) ? out.length : undefined, top: Array.isArray(data) ? data.slice(0, 5) : undefined });
-      messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(data).slice(0, 6000) });
+      messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(data).slice(0, 2500) });
     }
   }
   throw new Error('agent did not finish');
@@ -177,6 +225,17 @@ function overLimit(req) {
   return false;
 }
 
+// When every provider is out of quota, fall back to a real saved run rather than an error page, and
+// label it as saved. These are genuine responses captured from this same code, not hand-written.
+const slug = b => `${b.venue} ${b.area}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+
+async function savedRun(req, env, b) {
+  const r = await env.ASSETS.fetch(new URL(`/saved/${slug(b)}.json`, req.url));
+  if (!r.ok) return null;
+  const j = await r.json().catch(() => null);
+  return j && { ...j, cached: true };
+}
+
 export default {
   async fetch(req, env) {
     const { pathname } = new URL(req.url);
@@ -190,6 +249,10 @@ export default {
         return Response.json(await (pathname === '/api/brief' ? brief : baseline)(env, b));
       } catch (e) {
         const msg = String(e.message || e);
+        if (e.exhausted) {
+          const saved = await savedRun(req, env, b).catch(() => null);
+          if (saved) return Response.json(saved);
+        }
         // The demo runs on a free LLM tier with a per-minute cap. Say so plainly instead of showing
         // a judge a raw provider payload.
         if (/quota|RESOURCE_EXHAUSTED|\b429\b/.test(msg))

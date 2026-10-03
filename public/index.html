@@ -80,7 +80,11 @@ $('#f').onsubmit = async e => {
   const body = Object.fromEntries(new FormData(e.target));
   $('#go').disabled = true; $('#status').textContent = 'Asking Qloo… (about 20–40 s)';
   $('#base').innerHTML = $('#hayy').innerHTML = ''; $('#trace').textContent = '';
-  const show = (el, p) => p.then(j => { el.innerHTML = render(j.brief); if (j.trace) $('#trace').textContent = JSON.stringify(j.trace, null, 2); })
+  const show = (el, p) => p.then(j => {
+                            el.innerHTML = (j.cached ? `<p class="why"><b>Saved run.</b> Every live LLM tier behind this demo is out of quota for today, so this is a real response captured earlier from this same code — not a live call. Try again tomorrow for a live one.</p>` : '')
+                                         + render(j.brief);
+                            if (j.trace) $('#trace').textContent = JSON.stringify(j.trace, null, 2);
+                          })
                           .catch(err => el.innerHTML = `<p class="err">${esc(err.message)}</p>`);
   // Sequential, not parallel: the free LLM tier limits requests per minute, and the agent loop alone is
   // ~9 of them. Firing the baseline alongside it used to trip the quota on the first click.
