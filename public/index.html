@@ -30,6 +30,13 @@
   .post [dir=rtl] { font-size: 17px; }
   details { margin-top: 20px; }
   pre { white-space: pre-wrap; font-size: 12px; background:#fff; border:1px solid var(--line); padding:10px; overflow:auto; }
+  table.trace { width:100%; border-collapse: collapse; font-size: 13px; background:#fffdf8; }
+  table.trace th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); border-bottom:1px solid var(--line); padding:6px 8px; }
+  table.trace td { border-bottom:1px solid var(--line); padding:6px 8px; vertical-align:top; }
+  table.trace tr.empty td { color:#a11; }
+  table.trace code { font-size:12px; color:var(--accent); }
+  .tracesum { margin: 0 0 10px; font-size:14px; }
+  .tracesum b { color: var(--accent); }
   .err { color: #a11; }
   @media (max-width: 760px) { form, .cols { grid-template-columns: 1fr; } }
 </style>
@@ -51,7 +58,7 @@
     <section class="col"><h2>Generic AI (no Qloo)</h2><div id="base"></div></section>
     <section class="col hayy"><h2>Hayy (Qloo-grounded)</h2><div id="hayy"></div></section>
   </div>
-  <details><summary>Qloo calls the agent made</summary><pre id="trace"></pre></details>
+  <details><summary>Qloo calls the agent made</summary><div id="trace"></div><details><summary class="why">Raw JSON</summary><pre id="traceraw"></pre></details></details>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -71,6 +78,28 @@ function render(b) {
     + (b.posts?.length ? `<div class="card"><h3>This week's posts</h3>${b.posts.map(p => `<div class="post"><b>${esc(p.day)}</b><div lang="ar" dir="rtl">${esc(p.ar)}</div><div>${esc(p.en)}</div></div>`).join('')}</div>` : '')
     + list('Evidence', b.evidence, x => `<li class="why">${esc(x)}</li>`);
 }
+function renderTrace(trace) {
+  if (!trace?.length) return '';
+  const withData = trace.filter(t => t.status === 200 && t.n).length;
+  const empty = trace.filter(t => t.status === 200 && !t.n).length;
+  // Entity ids are unreadable in a trace, so name them: every id the agent signals with was returned by
+  // an earlier call, so the names are already here.
+  const names = {};
+  trace.forEach(t => (t.top || []).forEach(e => { if (e.id && e.name) names[e.id] = e.name; }));
+  const nameIds = ids => String(ids).split(',').map(id => names[id.trim()] || (id.trim().slice(0, 8) + '…')).join(', ');
+  const rows = trace.map((t, i) => {
+    const a = t.args || {};
+    const arg = esc([a.query, a.filter_type, a.location || a.filter_location, a.interest_entities && 'signal: ' + nameIds(a.interest_entities)]
+      .filter(Boolean).join(' · '));
+    const top = esc((t.top || []).map(e => e.name).filter(Boolean).slice(0, 3).join(', '));
+    return `<tr class="${t.status === 200 && !t.n ? 'empty' : ''}">
+      <td>${i + 1}</td><td><code>${esc(t.tool)}</code></td><td>${arg}</td>
+      <td>${t.status}</td><td>${t.n ?? '—'}</td><td class="why">${top}</td></tr>`;
+  }).join('');
+  return `<p class="tracesum"><b>${trace.length}</b> Qloo calls · <b>${withData}</b> returned data · <b>${empty}</b> empty</p>
+    <table class="trace"><thead><tr><th>#</th><th>Tool</th><th>Arguments</th><th>HTTP</th><th>Entities</th><th>Top results</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 async function call(path, body) {
   const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j;
@@ -79,11 +108,11 @@ $('#f').onsubmit = async e => {
   e.preventDefault();
   const body = Object.fromEntries(new FormData(e.target));
   $('#go').disabled = true; $('#status').textContent = 'Asking Qloo… (about 20–40 s)';
-  $('#base').innerHTML = $('#hayy').innerHTML = ''; $('#trace').textContent = '';
+  $('#base').innerHTML = $('#hayy').innerHTML = ''; $('#trace').innerHTML = ''; $('#traceraw').textContent = '';
   const show = (el, p) => p.then(j => {
                             el.innerHTML = (j.cached ? `<p class="why"><b>Saved run.</b> Every live LLM tier behind this demo is out of quota for today, so this is a real response captured earlier from this same code — not a live call. Try again tomorrow for a live one.</p>` : '')
                                          + render(j.brief);
-                            if (j.trace) $('#trace').textContent = JSON.stringify(j.trace, null, 2);
+                            if (j.trace) { $('#trace').innerHTML = renderTrace(j.trace); $('#traceraw').textContent = JSON.stringify(j.trace, null, 2); }
                           })
                           .catch(err => el.innerHTML = `<p class="err">${esc(err.message)}</p>`);
   // Sequential, not parallel: the free LLM tier limits requests per minute, and the agent loop alone is
