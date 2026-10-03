@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hayy · what your neighborhood loves</title>
+<style>
+  :root { --ink:#1b1a17; --paper:#f6f1e7; --line:#d9cfbd; --accent:#b4531f; --muted:#6d655a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.55 system-ui, "Noto Sans Arabic", sans-serif; color:var(--ink); background:var(--paper); }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: clamp(28px,5vw,44px); margin: 0 0 4px; letter-spacing: -.02em; }
+  .lede { color: var(--muted); margin: 0 0 24px; max-width: 60ch; }
+  form { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; border:1px solid var(--line); background:#fffdf8; }
+  label { display:grid; gap:4px; font-size:13px; color:var(--muted); }
+  input, textarea { font: inherit; padding: 10px 12px; border:1px solid var(--line); background:#fff; color:var(--ink); }
+  .full { grid-column: 1 / -1; }
+  button { font: inherit; font-weight:600; padding: 12px 18px; border:0; background:var(--ink); color:var(--paper); cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .examples { font-size:13px; color:var(--muted); }
+  .examples a { color: var(--accent); cursor:pointer; margin-inline-end: 10px; }
+  .cols { display:grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 28px; }
+  .col h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 10px; }
+  .col.hayy h2 { color: var(--accent); }
+  .card { border:1px solid var(--line); background:#fffdf8; padding: 14px 16px; margin-bottom: 12px; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+  .card ul { margin: 0; padding-inline-start: 18px; }
+  .why { color: var(--muted); font-size: 14px; }
+  .post { border-top: 1px dashed var(--line); padding: 8px 0; }
+  .post [dir=rtl] { font-size: 17px; }
+  details { margin-top: 20px; }
+  pre { white-space: pre-wrap; font-size: 12px; background:#fff; border:1px solid var(--line); padding:10px; overflow:auto; }
+  .err { color: #a11; }
+  @media (max-width: 760px) { form, .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Hayy <span lang="ar" dir="rtl">حيّ</span></h1>
+  <p class="lede">Tell it your café or restaurant and your neighborhood. Hayy asks Qloo's taste graph what the people around you actually love, then turns it into a menu move, an in-store playlist, collab partners and a week of Arabic/English posts. Every line points back to the data it came from.</p>
+
+  <form id="f">
+    <label>Venue name <input name="venue" required maxlength="120" placeholder="e.g. Brew92"></label>
+    <label>Neighborhood, city <input name="area" required maxlength="120" placeholder="e.g. Al Olaya, Riyadh"></label>
+    <label class="full">Concept (optional) <textarea name="concept" rows="2" maxlength="300" placeholder="Specialty coffee, students and young professionals, open late"></textarea></label>
+    <div class="full examples">Try: <a data-v="Brew92|Al Olaya, Riyadh|Specialty coffee, open late">Specialty café, Riyadh</a><a data-v="Shawarmer|Al Malqa, Riyadh|Fast casual shawarma, families">Shawarma, Riyadh</a><a data-v="Arabica|Dubai Mall, Dubai|Takeaway coffee for tourists">Café, Dubai</a></div>
+    <div class="full"><button id="go">Build my taste brief</button> <span id="status" class="why"></span></div>
+  </form>
+
+  <div class="cols">
+    <section class="col"><h2>Generic AI (no Qloo)</h2><div id="base"></div></section>
+    <section class="col hayy"><h2>Hayy (Qloo-grounded)</h2><div id="hayy"></div></section>
+  </div>
+  <details><summary>Qloo calls the agent made</summary><pre id="trace"></pre></details>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+document.querySelectorAll('.examples a').forEach(a => a.onclick = () => {
+  const [v, ar, c] = a.dataset.v.split('|'); const f = $('#f');
+  f.venue.value = v; f.area.value = ar; f.concept.value = c;
+});
+function render(b) {
+  if (!b) return '';
+  if (b.raw) return `<div class="card"><pre>${esc(b.raw)}</pre></div>`;
+  const list = (title, xs, f) => xs?.length ? `<div class="card"><h3>${title}</h3><ul>${xs.map(f).join('')}</ul></div>` : '';
+  return `<div class="card"><h3>Your audience</h3>${esc(b.audience)}</div>`
+    + list('Menu moves', b.menu, x => `<li>${esc(x.idea)} <div class="why">${esc(x.why)}</div></li>`)
+    + list('In-store playlist', b.playlist, x => `<li>${esc(x.artist)} <span class="why">· ${esc(x.why)}</span></li>`)
+    + list('Collab partners', b.collabs, x => `<li><b>${esc(x.brand)}</b>: ${esc(x.idea)}</li>`)
+    + (b.posts?.length ? `<div class="card"><h3>This week's posts</h3>${b.posts.map(p => `<div class="post"><b>${esc(p.day)}</b><div lang="ar" dir="rtl">${esc(p.ar)}</div><div>${esc(p.en)}</div></div>`).join('')}</div>` : '')
+    + list('Evidence', b.evidence, x => `<li class="why">${esc(x)}</li>`);
+}
+async function call(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j;
+}
+$('#f').onsubmit = async e => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target));
+  $('#go').disabled = true; $('#status').textContent = 'Asking Qloo… (about 20–40 s)';
+  $('#base').innerHTML = $('#hayy').innerHTML = ''; $('#trace').textContent = '';
+  const show = (el, p) => p.then(j => { el.innerHTML = render(j.brief); if (j.trace) $('#trace').textContent = JSON.stringify(j.trace, null, 2); })
+                          .catch(err => el.innerHTML = `<p class="err">${esc(err.message)}</p>`);
+  await Promise.all([show($('#base'), call('/api/baseline', body)), show($('#hayy'), call('/api/brief', body))]);
+  $('#go').disabled = false; $('#status').textContent = '';
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+name = "hayy"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+[vars]
+LLM_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
+LLM_MODEL = "gemini-3.8-flash"
+# secrets: QLOO_KEY, LLM_KEY  (wrangler secret put …)
