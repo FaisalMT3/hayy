@@ -86,7 +86,7 @@ cat > .dev.vars <<'VARS'
 QLOO_KEY=your-qloo-hackathon-key
 # Cloudflare Workers AI (what the hosted demo uses):
 LLM_BASE=https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1
-LLM_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast
+LLM_MODEL=@cf/openai/gpt-oss-120b
 LLM_KEY=<an API token with Workers AI Read+Edit>
 # …or anything else OpenAI-compatible, e.g.
 # LLM_BASE=https://generativelanguage.googleapis.com/v1beta/openai
@@ -130,6 +130,13 @@ One Cloudflare Worker, one static page, no build step and no dependencies.
 - Posts are written for a Saudi audience: natural Saudi-dialect Arabic, no alcohol, no pork.
 - Tool results are trimmed to names, ids, affinity and a few tags before reaching the model, to keep
   the context small enough for a long tool loop.
+- **The model matters more than I expected.** On `@cf/meta/llama-3.3-70b` the Qloo column kept producing
+  *categories* — "Specialty coffee drinks", "Artisanal pastries" — while the plain-LLM column beside it
+  produced concrete items like "Cardamom Latte". That inverts the entire point of the comparison. On
+  `@cf/openai/gpt-oss-120b` the same prompt gives "Cardamom-Rose Latte", "Date & Walnut Croissant", and
+  it surfaced the most interesting thing in the project: an Al Olaya audience affinity for Pakistani
+  dramas (*Zindagi Gulzar Hai*). The prompt also had to forbid categories outright, forbid reusing its
+  own examples (the smaller model copied them verbatim), and ask for the entity *name* rather than its id.
 - The hosted demo runs on free LLM tiers, which all run out: Cloudflare Workers AI caps a day at
   10,000 neurons and Gemini's free tier at 20 requests. So the worker takes a **list** of
   OpenAI-compatible providers (`LLM_*`, `LLM_*2`, `LLM_*3`) and falls through to the next when one is
