@@ -65,7 +65,8 @@ async function llm(env, messages, tools) {
     model: env.LLM_MODEL, messages, temperature: 0.4,
     ...(tools && { tools: tools.map(f => ({ type: 'function', function: f })) }),
   });
-  // Free tiers rate-limit per minute; a brief is ~10 calls, so one 429 must not lose the whole run.
+  // Free tiers rate-limit per minute and overload intermittently; a brief is ~10 calls, so one bad
+  // response must not lose the whole run.
   for (let attempt = 0; ; attempt++) {
     const r = await fetch(env.LLM_BASE + '/chat/completions', {
       method: 'POST',
@@ -73,7 +74,8 @@ async function llm(env, messages, tools) {
       body,
     });
     const text = await r.text();
-    if (r.status === 429 && attempt < 4) {
+    // 429 = rate limit, 5xx = the model is briefly overloaded; both are routine and both are worth waiting out.
+    if ((r.status === 429 || r.status >= 500) && attempt < 4) {
       const hint = +(text.match(/try again in ([\d.]+)s/)?.[1] || 0);
       await new Promise(res => setTimeout(res, Math.min(60, hint || 2 ** attempt * 5) * 1000 + 500));
       continue;
@@ -141,17 +143,42 @@ function parse(s) {
   try { return JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1)); } catch { return { raw: s }; }
 }
 
+// The demo is public and each brief costs real LLM tokens, so cap how fast one caller can spend them.
+// ponytail: per-isolate counters, so the limit is per edge location rather than global. Good enough to
+// stop a loop or a scraper; move to Durable Objects if a real flood ever shows up.
+const SEEN = new Map();
+const PER_IP = 6, WINDOW_MS = 10 * 60 * 1000;
+function overLimit(req) {
+  const ip = req.headers.get('CF-Connecting-IP') || 'local';
+  const now = Date.now();
+  const hits = (SEEN.get(ip) || []).filter(t => now - t < WINDOW_MS);
+  if (hits.length >= PER_IP) return true;
+  hits.push(now);
+  SEEN.set(ip, hits);
+  if (SEEN.size > 5000) for (const [k, v] of SEEN) if (!v.some(t => now - t < WINDOW_MS)) SEEN.delete(k);
+  return false;
+}
+
 export default {
   async fetch(req, env) {
     const { pathname } = new URL(req.url);
     if (req.method === 'POST' && (pathname === '/api/brief' || pathname === '/api/baseline')) {
+      if (overLimit(req))
+        return Response.json({ error: `Rate limit: ${PER_IP} briefs per 10 minutes per visitor. This is a hackathon demo on a personal API key — thanks for understanding.` }, { status: 429 });
       const b = await req.json().catch(() => ({}));
       if (!b.venue || !b.area || b.venue.length > 120 || b.area.length > 120 || (b.concept || '').length > 300)
         return Response.json({ error: 'venue and area are required (short text)' }, { status: 400 });
       try {
         return Response.json(await (pathname === '/api/brief' ? brief : baseline)(env, b));
       } catch (e) {
-        return Response.json({ error: String(e.message || e) }, { status: 502 });
+        const msg = String(e.message || e);
+        // The demo runs on a free LLM tier with a per-minute cap. Say so plainly instead of showing
+        // a judge a raw provider payload.
+        if (/quota|RESOURCE_EXHAUSTED|\b429\b/.test(msg))
+          return Response.json({ error: 'The free LLM tier behind this demo hit its per-minute quota. Give it a minute and try again — it resets quickly.' }, { status: 429 });
+        if (/UNAVAILABLE|high demand|\b50[0-9]\b/.test(msg))
+          return Response.json({ error: 'The model is briefly overloaded. Try again in a moment.' }, { status: 503 });
+        return Response.json({ error: msg }, { status: 502 });
       }
     }
     return env.ASSETS.fetch(req);

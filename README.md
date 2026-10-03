@@ -2,6 +2,8 @@
 
 **A taste-grounded marketing agent for small cafés and restaurants.**
 
+**Live demo: <https://hayy.faisalfahadmt3.workers.dev>**
+
 Tell Hayy your venue and your neighborhood. It asks [Qloo](https://qloo.com)'s taste graph what the
 people *around that venue* actually love, then turns the answer into a menu move, an in-store playlist,
 collaboration partners, and a week of Arabic/English social posts — with every line traced back to the
@@ -120,7 +122,9 @@ One Cloudflare Worker, one static page, no build step and no dependencies.
 - Posts are written for a Saudi audience: natural Saudi-dialect Arabic, no alcohol, no pork.
 - Tool results are trimmed to names, ids, affinity and a few tags before reaching the model, to keep
   the context small enough for a long tool loop.
-- The LLM call retries on `429` using the provider's own retry hint, and recovers when a model wraps its
+- The hosted demo runs on a free LLM tier with a per-minute quota and a per-visitor cap of 6 briefs
+  per 10 minutes. If you hit either, wait a moment — it resets quickly.
+- The LLM call retries on `429` (using the provider's own retry hint) and on `5xx`, and recovers when a model wraps its
   final answer in a bogus tool call — both are routine on free tiers and used to lose whole runs.
 
 ## License
