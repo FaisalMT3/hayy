@@ -82,7 +82,12 @@ $('#f').onsubmit = async e => {
   $('#base').innerHTML = $('#hayy').innerHTML = ''; $('#trace').textContent = '';
   const show = (el, p) => p.then(j => { el.innerHTML = render(j.brief); if (j.trace) $('#trace').textContent = JSON.stringify(j.trace, null, 2); })
                           .catch(err => el.innerHTML = `<p class="err">${esc(err.message)}</p>`);
-  await Promise.all([show($('#base'), call('/api/baseline', body)), show($('#hayy'), call('/api/brief', body))]);
+  // Sequential, not parallel: the free LLM tier limits requests per minute, and the agent loop alone is
+  // ~9 of them. Firing the baseline alongside it used to trip the quota on the first click.
+  $('#status').textContent = 'Asking a generic AI first…';
+  await show($('#base'), call('/api/baseline', body));
+  $('#status').textContent = 'Now asking Qloo what this neighborhood actually loves… (about 20–40 s)';
+  await show($('#hayy'), call('/api/brief', body));
   $('#go').disabled = false; $('#status').textContent = '';
 };
 </script>

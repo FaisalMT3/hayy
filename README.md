@@ -75,16 +75,22 @@ Empty-result calls went to zero in every city tested.
 
 ## Running it
 
-Requires a Qloo hackathon API key and any OpenAI-compatible LLM endpoint.
+Requires a Qloo hackathon API key and any OpenAI-compatible LLM endpoint. The hosted demo runs on
+Cloudflare Workers AI, because the free daily allowance is what makes a public demo viable — Gemini's
+free tier is **20 requests a day** and one brief is about eight of them.
 
 ```sh
 npm i -g wrangler   # or use npx
 
 cat > .dev.vars <<'VARS'
 QLOO_KEY=your-qloo-hackathon-key
-LLM_BASE=https://generativelanguage.googleapis.com/v1beta/openai
-LLM_MODEL=gemini-3.8-flash
-LLM_KEY=your-llm-key
+# Cloudflare Workers AI (what the hosted demo uses):
+LLM_BASE=https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1
+LLM_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast
+LLM_KEY=<an API token with Workers AI Read+Edit>
+# …or anything else OpenAI-compatible, e.g.
+# LLM_BASE=https://generativelanguage.googleapis.com/v1beta/openai
+# LLM_MODEL=gemini-3.8-flash
 VARS
 
 npx wrangler dev --port 8799
@@ -97,6 +103,8 @@ Deploying:
 ```sh
 npx wrangler secret put QLOO_KEY
 npx wrangler secret put LLM_KEY
+npx wrangler secret put LLM_BASE
+npx wrangler secret put LLM_MODEL
 npx wrangler deploy
 ```
 
@@ -124,6 +132,13 @@ One Cloudflare Worker, one static page, no build step and no dependencies.
   the context small enough for a long tool loop.
 - The hosted demo runs on a free LLM tier with a per-minute quota and a per-visitor cap of 6 briefs
   per 10 minutes. If you hit either, wait a moment — it resets quickly.
+- Portability across OpenAI-compatible endpoints needed three specific fixes, each found only by
+  running it: `max_tokens` must be sent explicitly (Workers AI's small default truncated the brief
+  mid-playlist and looked like malformed JSON); an assistant turn's `content: null` must be coerced to
+  `""` before it is echoed back (Workers AI returns null beside `tool_calls`, then rejects null, and its
+  error misleadingly claims a type mismatch on *every* message); and when the final JSON still comes
+  back incomplete, one corrective turn asking for JSON only recovers it — Dubai went from failing to
+  3-for-3 that way.
 - The LLM call retries on `429` (using the provider's own retry hint) and on `5xx`, and recovers when a model wraps its
   final answer in a bogus tool call — both are routine on free tiers and used to lose whole runs.
 

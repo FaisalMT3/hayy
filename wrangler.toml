@@ -6,7 +6,9 @@ compatibility_date = "2026-09-01"
 directory = "public"
 binding = "ASSETS"
 
-[vars]
-LLM_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
-LLM_MODEL = "gemini-3.8-flash"
-# secrets: QLOO_KEY, LLM_KEY  (wrangler secret put …)
+# The hosted demo runs on Cloudflare Workers AI, whose free daily allowance is what makes a public
+# demo viable (Gemini's free tier is 20 requests/day and one brief is ~8 of them). Any
+# OpenAI-compatible endpoint works — set LLM_BASE / LLM_MODEL / LLM_KEY to whatever you have.
+# secrets: QLOO_KEY, LLM_KEY, LLM_BASE, LLM_MODEL  (wrangler secret put …)
+# LLM_BASE for Workers AI: https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1
+# LLM_MODEL for Workers AI: @cf/meta/llama-3.3-70b-instruct-fp8-fast

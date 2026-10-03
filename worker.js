@@ -63,6 +63,9 @@ const RUN = {
 async function llm(env, messages, tools) {
   const body = JSON.stringify({
     model: env.LLM_MODEL, messages, temperature: 0.4,
+    // Must be explicit: Workers AI caps completions at a couple of hundred tokens by default, which
+    // truncated the brief mid-playlist and looked like malformed JSON rather than a length limit.
+    max_tokens: 4096,
     ...(tools && { tools: tools.map(f => ({ type: 'function', function: f })) }),
   });
   // Free tiers rate-limit per minute and overload intermittently; a brief is ~10 calls, so one bad
@@ -75,9 +78,10 @@ async function llm(env, messages, tools) {
     });
     const text = await r.text();
     // 429 = rate limit, 5xx = the model is briefly overloaded; both are routine and both are worth waiting out.
-    if ((r.status === 429 || r.status >= 500) && attempt < 4) {
+    if ((r.status === 429 || r.status >= 500) && attempt < 3) {
+      // Cap the wait: a judge staring at a spinner is worse than an honest "try again in a minute".
       const hint = +(text.match(/try again in ([\d.]+)s/)?.[1] || 0);
-      await new Promise(res => setTimeout(res, Math.min(60, hint || 2 ** attempt * 5) * 1000 + 500));
+      await new Promise(res => setTimeout(res, Math.min(12, hint || 2 ** attempt * 3) * 1000 + 500));
       continue;
     }
     const j = JSON.parse(text || '{}');
@@ -113,10 +117,24 @@ async function brief(env, b) {
       if (!/tool_use_failed|[Tt]ool call validation/.test(String(e.message))) throw e;
       m = await llm(env, messages, undefined);
     }
+    // Normalise the assistant turn before echoing it back. Workers AI returns `content: null` beside
+    // tool_calls and then rejects null on the next request (its error claims a type mismatch on every
+    // message, which is misleading — only this field is wrong). Array content gets flattened for the
+    // shims that return parts.
+    if (Array.isArray(m.content)) m.content = m.content.map(p => p?.text ?? '').join('');
+    else if (m.content == null) m.content = '';
     messages.push(m);
     if (!m.tool_calls?.length) {
       if (!trace.some(t => t.status === 200 && t.n)) throw new Error('Qloo returned no taste data for this venue/area, so there is nothing grounded to say.');
-      return { brief: parse(m.content), trace };
+      let brief = parse(m.content);
+      // Smaller models sometimes end with prose around the JSON, or stop mid-object. One corrective
+      // turn recovers the brief far more often than it costs, and the Qloo work is already paid for.
+      if (brief.raw) {
+        messages.push({ role: 'user', content: 'That was not a complete, valid JSON object. Reply with ONLY the JSON object described earlier — no prose, no code fences, every field present and the braces closed.' });
+        const retry = parse((await llm(env, messages, undefined)).content);
+        if (!retry.raw) brief = retry;
+      }
+      return { brief, trace };
     }
     for (const c of m.tool_calls) {
       const args = JSON.parse(c.function.arguments || '{}');
